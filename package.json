@@ -1,6 +1,6 @@
 {
   "name": "@kne/fastify-integration",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "KNE 子应用集成协议插件：租户级联邦，同时具备上游(host)与下游(guest)两侧能力",
   "main": "index.js",
   "scripts": {
@@ -49,8 +49,13 @@
     "@kne/fastify-namespace": "*",
     "@kne/fastify-sequelize": "*",
     "@kne/fastify-signature": ">=1.0.2",
-    "@kne/fastify-tenant": ">=1.0.0",
+    "@kne/fastify-tenant": ">=1.0.0-alpha.0",
     "fastify-plugin": ">=5"
+  },
+  "peerDependenciesMeta": {
+    "@kne/fastify-tenant": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@fastify/env": "^5.0.2",
