@@ -6,8 +6,13 @@ const build = async (options = {}) => {
   const fastify = fastifyFactory({ logger: false });
 
   const registeredRoutes = [];
-  fastify.addHook('onRoute', route => registeredRoutes.push(route.url));
+  const registeredRouteOptions = [];
+  fastify.addHook('onRoute', route => {
+    registeredRoutes.push(route.url);
+    registeredRouteOptions.push(route);
+  });
   fastify.decorate('registeredRoutes', registeredRoutes);
+  fastify.decorate('registeredRouteOptions', registeredRouteOptions);
 
   await fastify.register(require('@kne/fastify-sequelize'), {
     db: { dialect: 'sqlite', storage: ':memory:', logging: false },

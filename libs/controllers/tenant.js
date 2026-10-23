@@ -1,4 +1,5 @@
 const fp = require('fastify-plugin');
+const { str, bool, any, obj, arr, success } = require('../schema/response');
 
 module.exports = fp(async (fastify, options) => {
   const { services } = fastify[options.name];
@@ -9,7 +10,29 @@ module.exports = fp(async (fastify, options) => {
     `${options.prefix}/tenant/app/list`,
     {
       onRequest: [options.getUserAuthenticate(), options.getTenantUserAuthenticate()],
-      schema: { summary: '当前租户已开通的下游应用及其前端挂载声明' }
+      schema: {
+        tags: ['集成-租户应用'],
+        summary: '当前租户已开通的下游应用及其前端挂载声明',
+        description: '列出当前租户已开通且启用的下游应用，并合并其 manifest（走缓存）供前端决定渲染哪些挂载点；某个下游 manifest 拉取失败时不影响整个接口，该项 available 为 false 且只返回注册信息',
+        response: success(
+          '已开通的下游应用',
+          obj(undefined, {
+            pageData: arr(
+              '下游应用列表',
+              obj('下游应用', {
+                appCode: str('下游应用编码'),
+                name: any('应用名称，优先取 manifest 中的名称'),
+                proxyBase: str('代理转发基路径：{prefix}/proxy/{appCode}'),
+                linkedAt: any('开通时间'),
+                description: any('manifest 中的应用描述；manifest 不可用时不返回'),
+                web: any('manifest 中的前端产物声明；manifest 不可用时不返回'),
+                mounts: any('manifest 中的前端挂载点声明数组；manifest 不可用时为空数组'),
+                available: bool('manifest 是否可用')
+              })
+            )
+          })
+        )
+      }
     },
     async request => {
       const tenantUserInfo = request[options.tenantUserContextName];

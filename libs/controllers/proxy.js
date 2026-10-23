@@ -1,6 +1,9 @@
 const fp = require('fastify-plugin');
 const replyFrom = require('@fastify/reply-from');
 const { IntegrationError } = require('../utils/errors');
+const { str, num, any, obj, success } = require('../schema/response');
+
+const TAG = '集成-租户应用';
 
 module.exports = fp(async (fastify, options) => {
   const { services } = fastify[options.name];
@@ -17,6 +20,20 @@ module.exports = fp(async (fastify, options) => {
   fastify.route({
     method: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'],
     url: `${options.prefix}/proxy/:appCode/*`,
+    // 返回的是下游原始响应（含非 JSON 与重定向），不声明 response，避免序列化干扰转发
+    schema: {
+      tags: [TAG],
+      summary: '代理转发到下游应用',
+      description:
+        '把 {prefix}/proxy/{appCode}/ 之后的路径与查询串原样转发到下游业务接口（下游票据中的 apiBase，缺省为注册的 apiUrl），请求体不解析、原样转发。服务端自动换票并注入第三方登录票据请求头，剥掉上游的 cookie、authorization 与客户端登录 token；下游返回的重定向 Location 会改写回代理路径。返回下游的原始响应。当前租户须已开通该下游应用',
+      params: {
+        type: 'object',
+        properties: {
+          appCode: { description: '下游应用编码' },
+          '*': { description: '转发到下游的路径（相对下游业务接口基地址）' }
+        }
+      }
+    },
     onRequest: [options.getUserAuthenticate(), options.getTenantUserAuthenticate()],
     // 转发时必须拿到原始请求体，不能让 fastify 先解析成对象再由我序列化回去：
     // 上传等 multipart 请求一旦被解析就无法原样重放
@@ -76,15 +93,27 @@ module.exports = fp(async (fastify, options) => {
     {
       onRequest: [options.getUserAuthenticate(), options.getTenantUserAuthenticate()],
       schema: {
+        tags: [TAG],
         summary: '为当前租户用户换取下游应用的登录票据',
+        description: '供前端直连下游（加载下游前端资源、建立独立 SSE 等）时使用；票据按下游 + 租户 + 租户用户缓存，临近过期自动重新换取。返回值不含下游 secretKey',
         body: {
           type: 'object',
           properties: {
-            appCode: { type: 'string' },
-            force: { type: 'boolean', default: false }
+            appCode: { type: 'string', description: '下游应用编码' },
+            force: { type: 'boolean', default: false, description: '是否忽略缓存强制重新换票' }
           },
           required: ['appCode']
-        }
+        },
+        response: success(
+          '下游登录票据',
+          obj(undefined, {
+            appCode: str('下游应用编码'),
+            token: any('下游签发的第三方登录票据'),
+            tokenHeader: any('携带票据的请求头名，下游未返回时为 x-third-login-token'),
+            proxyBase: str('代理转发基路径：{prefix}/proxy/{appCode}'),
+            expiresAt: num('票据过期时间戳（毫秒）')
+          })
+        )
       }
     },
     async request => {
