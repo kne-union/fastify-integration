@@ -422,7 +422,7 @@ fastify.register(require('@kne/fastify-integration'), {
 
 ###### POST /tenant/app/session
 
-为当前租户用户换取下游登录票据（不含下游 secretKey）。
+为当前租户用户换取下游登录票据（不含下游 secretKey）。与代理转发一致，当前租户须已开通该下游（开通关系与应用均为启用），否则返回 403。
 
 | 参数 | 位置 | 类型 | 必填 | 说明 |
 |------|------|------|------|------|
