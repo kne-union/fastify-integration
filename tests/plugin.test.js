@@ -304,4 +304,55 @@ describe('plugin', () => {
     assert.equal(shadow.status, 'closed');
     assert.ok(await downstream.tenant.models.user.findByPk(shadowUser.id), '停用不得删除下游业务身份数据');
   });
+
+  describe('租户端换票接口须校验开通关系', () => {
+    const setup = async () => {
+      const [upstreamPort, downstreamPort] = await Promise.all([getFreePort(), getFreePort()]);
+      const upstreamUrl = `http://127.0.0.1:${upstreamPort}/api/integration`;
+      const downstreamUrl = `http://127.0.0.1:${downstreamPort}/api/integration`;
+      const upstream = track(await build({ appCode: 'host-app', appName: '上游', selfApiUrl: upstreamUrl }));
+      const downstream = track(await build({ appCode: 'guest-app', appName: '下游', selfApiUrl: downstreamUrl, snapshotDebounce: 20 }));
+      const { tenant, user } = await seedTenant(upstream);
+      await Promise.all([upstream.listen({ port: upstreamPort, host: '127.0.0.1' }), downstream.listen({ port: downstreamPort, host: '127.0.0.1' })]);
+      await upstream.integration.services.registry.saveApp({ appCode: 'guest-app', name: '下游', apiUrl: downstreamUrl, appId: 'any', secretKey: 'any' });
+      await upstream.integration.services.registry.install({ appCode: 'guest-app', authenticatePayload: { id: '1' } });
+      const requestSession = () =>
+        upstream.inject({
+          method: 'POST',
+          url: '/api/integration/tenant/app/session',
+          headers: { 'x-test-tenant-id': String(tenant.id), 'x-test-tenant-user-id': String(user.id) },
+          payload: { appCode: 'guest-app' }
+        });
+      return { upstream, downstream, tenant, requestSession };
+    };
+
+    it('未开通的租户换票返回 403，且不会在下游懒建影子租户', async () => {
+      const { downstream, tenant, requestSession } = await setup();
+
+      const res = await requestSession();
+      assert.equal(res.statusCode, 403);
+      assert.match(res.json().message, /未开通 guest-app/);
+
+      const shadow = await downstream.integration.services.guest.findShadowTenant({ hostAppCode: 'host-app', sourceTenantId: tenant.id });
+      assert.equal(shadow, null, '被拒的换票不得在下游建出影子租户');
+    });
+
+    it('已开通的租户可正常换票，应用停用后与代理接口一样返回 403', async () => {
+      const { upstream, downstream, tenant, requestSession } = await setup();
+      await upstream.integration.services.lifecycle.linkTenant({ tenantId: tenant.id, appCode: 'guest-app' });
+
+      const res = await requestSession();
+      assert.equal(res.statusCode, 200);
+      const body = res.json();
+      assert.ok(body.token);
+      assert.equal(body.appCode, 'guest-app');
+      assert.equal(body.proxyBase, '/api/integration/proxy/guest-app');
+      const shadow = await downstream.integration.services.guest.getShadowTenant({ hostAppCode: 'host-app', sourceTenantId: tenant.id });
+      assert.ok(shadow);
+
+      await upstream.integration.services.registry.setAppStatus({ appCode: 'guest-app', status: 'disabled' });
+      const disabled = await requestSession();
+      assert.equal(disabled.statusCode, 403);
+    });
+  });
 });

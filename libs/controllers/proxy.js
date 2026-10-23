@@ -17,6 +17,19 @@ module.exports = fp(async (fastify, options) => {
 
   const stripPrefix = new RegExp(`^${options.prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/proxy/[^/]+`);
 
+  // 代理与换票共用：只有已开通（链接与应用均为启用）的下游才放行。
+  // 换票时上游签发的身份断言带着租户信息，下游会据此懒建影子租户，这里不挡就等于绕过开通。
+  const getEnabledLink = async ({ appCode, tenantUserInfo }) => {
+    if (!tenantUserInfo) {
+      throw new IntegrationError('INTEGRATION_TENANT_USER_REQUIRED', '缺少租户用户上下文，无法访问下游应用', 403);
+    }
+    const link = (await services.registry.listEnabledLinksByTenant({ tenantId: tenantUserInfo.tenantId })).find(item => item.app.appCode === appCode);
+    if (!link) {
+      throw new IntegrationError('INTEGRATION_TENANT_NOT_LINKED', `当前租户未开通 ${appCode}`, 403);
+    }
+    return link;
+  };
+
   fastify.route({
     method: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'],
     url: `${options.prefix}/proxy/:appCode/*`,
@@ -41,14 +54,7 @@ module.exports = fp(async (fastify, options) => {
     handler: async (request, reply) => {
       const { appCode } = request.params;
       const tenantUserInfo = request[options.tenantUserContextName];
-      if (!tenantUserInfo) {
-        throw new IntegrationError('INTEGRATION_TENANT_USER_REQUIRED', '缺少租户用户上下文，无法转发', 403);
-      }
-
-      const link = (await services.registry.listEnabledLinksByTenant({ tenantId: tenantUserInfo.tenantId })).find(item => item.app.appCode === appCode);
-      if (!link) {
-        throw new IntegrationError('INTEGRATION_TENANT_NOT_LINKED', `当前租户未开通 ${appCode}`, 403);
-      }
+      const link = await getEnabledLink({ appCode, tenantUserInfo });
 
       const session = await services.session.getSession({ appCode, tenantUserInfo });
       const target = String(session.apiBase || link.app.apiUrl).replace(/\/+$/, '');
@@ -95,7 +101,8 @@ module.exports = fp(async (fastify, options) => {
       schema: {
         tags: [TAG],
         summary: '为当前租户用户换取下游应用的登录票据',
-        description: '供前端直连下游（加载下游前端资源、建立独立 SSE 等）时使用；票据按下游 + 租户 + 租户用户缓存，临近过期自动重新换取。返回值不含下游 secretKey',
+        description:
+          '供前端直连下游（加载下游前端资源、建立独立 SSE 等）时使用；票据按下游 + 租户 + 租户用户缓存，临近过期自动重新换取。返回值不含下游 secretKey。当前租户须已开通该下游应用（开通关系与应用均为启用），否则返回 403（INTEGRATION_TENANT_NOT_LINKED），与代理转发接口一致',
         body: {
           type: 'object',
           properties: {
@@ -117,9 +124,11 @@ module.exports = fp(async (fastify, options) => {
       }
     },
     async request => {
+      const tenantUserInfo = request[options.tenantUserContextName];
+      await getEnabledLink({ appCode: request.body.appCode, tenantUserInfo });
       const session = await services.session.getSession({
         appCode: request.body.appCode,
-        tenantUserInfo: request[options.tenantUserContextName],
+        tenantUserInfo,
         force: request.body.force
       });
       return {
